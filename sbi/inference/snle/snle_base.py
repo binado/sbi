@@ -12,7 +12,12 @@ from torch.nn.utils.clip_grad import clip_grad_norm_
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from sbi.inference import NeuralInference
-from sbi.inference.posteriors import MCMCPosterior, RejectionPosterior, VIPosterior
+from sbi.inference.posteriors import (
+    ImportanceSamplingPosterior,
+    MCMCPosterior,
+    RejectionPosterior,
+    VIPosterior,
+)
 from sbi.inference.potentials import likelihood_estimator_based_potential
 from sbi.neural_nets import DensityEstimator, likelihood_nn
 from sbi.neural_nets.density_estimators.shape_handling import (
@@ -267,10 +272,14 @@ class LikelihoodEstimator(NeuralInference, ABC):
         sample_with: str = "mcmc",
         mcmc_method: str = "slice_np",
         vi_method: str = "rKL",
+        importance_method: str = "sir",
         mcmc_parameters: Optional[Dict[str, Any]] = None,
         vi_parameters: Optional[Dict[str, Any]] = None,
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
-    ) -> Union[MCMCPosterior, RejectionPosterior, VIPosterior]:
+        importance_sampling_parameters: Optional[Dict[str, Any]] = None,
+    ) -> Union[
+        MCMCPosterior, RejectionPosterior, VIPosterior, ImportanceSamplingPosterior
+    ]:
         r"""Build posterior from the neural density estimator.
 
         SNLE trains a neural network to approximate the likelihood $p(x|\theta)$. The
@@ -283,7 +292,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 If `None`, use the latest neural density estimator that was trained.
             prior: Prior distribution.
             sample_with: Method to use for sampling from the posterior. Must be one of
-                [`mcmc` | `rejection` | `vi`].
+                [`mcmc` | `rejection` | `vi` | `importance`].
             mcmc_method: Method used for MCMC sampling, one of `slice_np`, `slice`,
                 `hmc`, `nuts`. Currently defaults to `slice_np` for a custom numpy
                 implementation of slice sampling; select `hmc`, `nuts` or `slice` for
@@ -291,10 +300,17 @@ class LikelihoodEstimator(NeuralInference, ABC):
             vi_method: Method used for VI, one of [`rKL`, `fKL`, `IW`, `alpha`]. Note
                 some of the methods admit a `mode seeking` property (e.g. rKL) whereas
                 some admit a `mass covering` one (e.g fKL).
+            importance_method: Method used for importance sampling,
+                one of [`sir`|`importance`]. With `sir`, approximate posterior samples
+                are generated with sampling importance resampling (SIR).
+                With`importance`, the `.sample()` method returns a tuple of
+                samples and corresponding importance weights.
             mcmc_parameters: Additional kwargs passed to `MCMCPosterior`.
             vi_parameters: Additional kwargs passed to `VIPosterior`.
             rejection_sampling_parameters: Additional kwargs passed to
                 `RejectionPosterior`.
+            importance_sampling_parameters: Additional kwargs passed to
+                `ImportanceSamplingPosterior`.
 
         Returns:
             Posterior $p(\theta|x)$  with `.sample()` and `.log_prob()` methods
@@ -349,6 +365,15 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 vi_method=vi_method,
                 device=device,
                 **vi_parameters or {},
+            )
+        elif sample_with == "importance":
+            self._posterior = ImportanceSamplingPosterior(
+                potential_fn=potential_fn,
+                theta_transform=theta_transform,
+                proposal=prior,
+                method=importance_method,
+                device=device,
+                **importance_sampling_parameters or {},
             )
         else:
             raise NotImplementedError
